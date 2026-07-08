@@ -102,3 +102,53 @@ document in Hancom Office instead.
 Parse by local name (`tag.rsplit('}', 1)[-1]`) — Hancom has revised namespace URIs
 between releases, and DRM-packaged HWPX may omit `Contents/section*.xml` entirely
 (detect and refuse rather than returning empty text).
+
+## Writing HWPX (package rules learned from real files)
+
+Dissected from Hancom-authored HWPX packages; these are the invariants a writer
+must respect.
+
+### Minimal valid package (9–10 entries)
+
+`mimetype`, `version.xml`, `META-INF/{container.xml, manifest.xml, container.rdf}`,
+`Contents/{content.hpf, header.xml, section0.xml}`, `Preview/PrvText.txt`,
+`settings.xml`. `BinData/*` and `Preview/PrvImage.*` only when embedding binaries.
+
+- **`mimetype` must be the FIRST zip entry, STORED (uncompressed)**, containing
+  exactly `application/hwp+zip` (19 bytes, no newline) — same convention as ODF.
+- `content.hpf` (OPF) must list every part in `opf:manifest` and order
+  `header (linear="no") → section0` in `opf:spine`. Images need `isEmbeded="1"`
+  (Hancom's spelling — keep it, along with `tagetApplication` in version.xml).
+- `container.xml` points at `content.hpf`, `Preview/PrvText.txt`, `container.rdf`.
+- `PrvText.txt` is UTF-8 **without BOM**.
+
+### ID reference system (header.xml `hh:refList`)
+
+Resources are 0-based-id pools referenced from the body:
+
+```
+hp:p @paraPrIDRef / @styleIDRef   →  hh:paraPr @id / hh:style @id
+hp:run @charPrIDRef               →  hh:charPr @id
+hp:tbl, hp:tc @borderFillIDRef    →  hh:borderFill @id
+hh:charPr/hh:fontRef @hangul...   →  hh:fontface/hh:font @id
+```
+
+Each list's `itemCnt` must equal its child count; dangling IDRefs are fatal in the
+editor. The python-hwpx blank template ships style id 0 = 바탕글, ids 2–11 =
+개요 1–10 (usable for headings), and `add_run(bold=/size=/color=)` creates matching
+charPr entries on demand.
+
+### Units
+
+Page/table geometry is HWPUNIT (1/7200 inch — A4 portrait = 59528 × 84188).
+Character height is 1/100 pt (`height="1000"` = 10 pt).
+
+### Run splitting (why template fill needs cross-run matching)
+
+Hancom's editor splits paragraph text into multiple `hp:run`/`hp:t` nodes following
+the author's edit history, so a placeholder like `{{성명}}` is often stored as
+`{{성` + `명}}` in separate runs. `fill_hwpx.py` therefore concatenates the
+paragraph text with per-node offset maps, matches on the joined string, and writes
+back per node; the replacement inherits the charPr of the run where `{{` starts.
+Paragraph terminators are per-record in .hwp but real `<hp:lineBreak/>` elements
+inside `hp:t` in HWPX.
